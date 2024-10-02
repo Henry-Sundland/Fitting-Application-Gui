@@ -44,30 +44,74 @@ class MainGUI:
 
         # Add the fit type dropdown
         self.fit_type = tk.StringVar()
-        fit_options = ['Linear Fit (no uncertainties)','Linear Fit (with y uncertainties)', 'Power-Law Fit (with uncertainties)']  # Add your desired fit options here
+
+
+        # Add polynomial order entry (but make it appear only when Polynomial Fit is selected)
+        self.poly_order_label = tk.Label(master, text="Polynomial Order:")
+        self.poly_order_entry = tk.Entry(master)
+        self.poly_order_label.place_forget()  # Hide initially
+        self.poly_order_entry.place_forget()  # Hide initially   
+
+
+
+
+
+
+        fit_options = ['Linear Fit (no uncertainties)','Linear Fit (with y uncertainties)', 'Power-Law Fit (with uncertainties)', 'Polynomial Fit']  # Add your desired fit options here
         self.fit_dropdown = ttk.Combobox(master, textvariable=self.fit_type, values=fit_options)
         self.fit_dropdown.place(relx=0.90, rely=0.5, anchor='center')  # Position it in the middle-far right
         self.fit_dropdown.set('Select Fit Type')
 
+        #Link the dropdown selection to show/hide the polynomial order input
+        self.fit_dropdown.bind("<<ComboboxSelected>>", self.on_fit_selection)        
+
 
         # Fit Parameters Label
         self.fit_params_label = tk.Label(master, text="")
-        self.fit_params_label.place(relx=0.90, rely=0.6, anchor='center')
+        self.fit_params_label.place(relx=0.88, rely=0.70, anchor='center')
 
         # Add a "Fit!" button to apply the fit
         self.fit_button = tk.Button(master, text="Fit!", command=self.apply_fit)
-        self.fit_button.place(relx=0.90, rely=0.55, anchor='center')
+        self.fit_button.place(relx=0.90, rely=0.62, anchor='center')
 
 
         # Add the Exit Program button and place it towards the bottom left
         self.exit_button = tk.Button(master, text="Exit Program", command=self.master.quit)
         self.exit_button.place(relx=0.01, rely=0.95, anchor='sw')  # Adjust the button's position
 
+
+
+    def on_fit_selection(self, event):
+        # If 'Polynomial Fit' is selected, show the polynomial order input
+        fit_type = self.fit_type.get()
+        if fit_type == 'Polynomial Fit':
+            self.poly_order_label.place(relx=0.85, rely=0.57, anchor='center')
+            self.poly_order_entry.place(relx=0.90, rely=0.57, anchor='center')
+        else:
+            self.poly_order_label.place_forget()
+            self.poly_order_entry.place_forget()
+
+
+
+
+
     def apply_fit(self):
         # Get the selected fit type
         fit_type = self.fit_dropdown.get()
 
-        if fit_type == 'Linear Fit (no uncertainties)':
+
+        if fit_type == 'Polynomial Fit':
+            poly_order = int(self.poly_order_entry.get())
+            fitter = FittingClass(self.x_col_data, self.y_col_data, self.y_uncertainties)
+            coefficients, uncertainties, chi_squared = fitter.polynomial_fit_with_uncertainties(poly_order)
+            self.plot_polynomial_fit(coefficients)
+            self.fit_params_label.config(text=f"Polynomial Coefficients: {coefficients}\n"
+                                              f"Uncertainties: {uncertainties}\n"
+                                              f"Chi²: {chi_squared:.2f}")
+
+
+
+        elif fit_type == 'Linear Fit (no uncertainties)':
             # Pass y_uncertainties as None for no-uncertainties fit
             fitter = FittingClass(self.x_col_data, self.y_col_data, None)
             slope, y_intercept, slope_uncert, y_intercept_uncert = fitter.linear_fit_no_uncertainties()
@@ -91,6 +135,32 @@ class MainGUI:
             self.fit_params_label.config(text=f"a (coefficient): {a_fit:.4f} ± {uncertainty_a_fit:.4f}\n"
                                             f"b (exponent): {b_fit:.4f} ± {uncertainty_b_fit:.4f}\n"
                                             f"Chi²: {chi_squared:.2f}")
+
+
+
+    def plot_polynomial_fit(self, coefficients):
+        if self.plot_widget:
+            self.plot_widget.get_tk_widget().destroy()
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+
+        if self.y_uncertainties is not None:
+            ax.errorbar(self.x_col_data, self.y_col_data, yerr=self.y_uncertainties, fmt='o', color='blue', ecolor='gray', capsize=5)
+        else:
+            ax.scatter(self.x_col_data, self.y_col_data, label='Data', color='blue')
+
+        y_fit = np.polyval(coefficients, self.x_col_data)
+        ax.plot(self.x_col_data, y_fit, label='Polynomial Fit', color='red')
+
+        ax.legend()
+        ax.set_title(f'Polynomial Fit (Degree {len(coefficients)-1})')
+        ax.set_xlabel('X-axis')
+        ax.set_ylabel('Y-axis')
+
+        self.plot_widget = FigureCanvasTkAgg(fig, master=self.master)
+        self.plot_widget.draw()
+        self.plot_widget.get_tk_widget().pack(pady=10)
+
 
 
     def plot_with_fit(self, slope, y_intercept):
@@ -155,7 +225,24 @@ class MainGUI:
         self.plot_widget.draw()
         self.plot_widget.get_tk_widget().pack(pady=10)
 
+    def display_polynomial_fit_params(self, coefficients, uncertainties):
+        # Arrange coefficients and uncertainties into rows of 6
+        display_text = ""
+        for i in range(0, len(coefficients), 6):
+            # Get a slice of 6 coefficients and their uncertainties for this row
+            coeff_slice = coefficients[i:i+6]
+            uncert_slice = uncertainties[i:i+6]
 
+            # Format the row
+            row_text = ""
+            for coeff, uncert in zip(coeff_slice, uncert_slice):
+                row_text += f"{coeff:.4f} ± {uncert:.4f}    "
+
+            # Add the row to the display text
+            display_text += row_text + "\n"
+
+        # Set the display text on the fit_params_label
+        self.fit_params_label.config(text=display_text)
 
 
     def load_data(self):
@@ -326,6 +413,34 @@ class FittingClass:
 
 
         return a_fit, b_fit, uncertainty_a_fit, uncertainty_b_fit, chi_squared
+
+
+
+    def polynomial_fit_with_uncertainties(self, degree):
+        x = self.x_data
+        y = self.y_data
+        dy = self.y_uncertainties
+
+        if dy is None:
+            # Simple polynomial fit without uncertainties
+            coefficients = np.polyfit(x, y, degree)
+            y_fit = np.polyval(coefficients, x)
+            residuals = y - y_fit
+            chi_squared = np.sum(residuals ** 2)
+            uncertainties = np.zeros_like(coefficients)  # Placeholder; uncertainties require more complex calculations
+
+        else:
+            # Weighted polynomial fit
+            weights = 1 / dy**2
+            coefficients = np.polyfit(x, y, degree, w=weights)
+            y_fit = np.polyval(coefficients, x)
+            residuals = (y - y_fit) / dy
+            chi_squared = np.sum(residuals ** 2)
+            uncertainties = np.sqrt(np.diag(np.linalg.inv(np.dot(np.vander(x, degree+1).T, np.vander(x, degree+1)))))  # Approximate uncertainties
+
+        return coefficients, uncertainties, chi_squared
+
+
 
 
     def linear_fit_no_uncertainties(self):
